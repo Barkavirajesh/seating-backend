@@ -7,66 +7,68 @@ app = Flask(__name__)
 CORS(app)
 
 def normalize_year(value):
-    """Convert Roman numerals or floats to integer year as string."""
-    if value is None:
+    if value is None or pd.isna(value):
         return None
     value = str(value).strip().upper()
-    roman_map = {"I": "1", "II": "2", "III": "3", "IV": "4"}
-    if value in roman_map:
-        return roman_map[value]
-    try:
-        return str(int(float(value)))
-    except:
-        return None
+    mapping = {
+        "I": "1", "II": "2", "III": "3", "IV": "4",
+        "1": "1", "2": "2", "3": "3", "4": "4"
+    }
+    return mapping.get(value)
 
-@app.route('/upload-excel', methods=['POST'])
+@app.route("/upload-excel", methods=["POST"])
 def upload_excel():
-    if 'file' not in request.files:
-        return jsonify({"error": "No file part"}), 400
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
 
-    file = request.files['file']
-
-    # ✅ Normalize selected year coming from React
+    file = request.files["file"]
     selected_year = normalize_year(request.form.get("year"))
 
-    if file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
-
     try:
-        df = pd.read_excel(file, header=4)
-        df = df.iloc[:, 1:]
-        df['Branch'] = df['Branch'].ffill()
-        df = df.dropna(subset=['YEAR', 'Strength'])
+        df = pd.read_excel(file, header=3)
+
+        df = df.loc[:, ~df.columns.isna()]
+        df.columns = [str(c) for c in df.columns]
+
+        df["Branch"] = df["Branch"].ffill()
+        df = df.dropna(subset=["YEAR", "Strength"])
+
+        hall_columns = [
+            c for c in df.columns
+            if c.isdigit() and len(c) == 3
+        ]
 
         hall_grouped = defaultdict(list)
 
         for _, row in df.iterrows():
-            branch = str(row['Branch']).strip()
-            year = normalize_year(row['YEAR'])
+            branch = str(row["Branch"])
+            year = normalize_year(row["YEAR"])
 
-            # ✅ Correct year filtering
             if selected_year and year != selected_year:
                 continue
 
-            for col in df.columns:
-                if col not in ['S.No.', 'Branch', 'YEAR', 'Strength', 'Boys', 'Girls', 'TOTAL']:
+            for hall in hall_columns:
+                val = row[hall]
+                if pd.notna(val):
                     try:
-                        val_int = int(float(row[col]))
-                        if val_int > 0:
-                            hall_grouped[col.strip()].append({
-                                "students_count": val_int,
+                        count = int(float(val))
+                        if count > 0:
+                            hall_grouped[hall].append({
                                 "department": branch,
+                                "students_count": count,
                                 "year": year
                             })
-                    except (ValueError, TypeError):
-                        continue
+                    except:
+                        pass
 
         for hall in hall_grouped:
-            hall_grouped[hall] = sorted(
-                hall_grouped[hall],
+            hall_grouped[hall].sort(
                 key=lambda x: x["students_count"],
                 reverse=True
             )
+
+        print("✅ Detected halls:", hall_columns)
+        print("✅ Data:", hall_grouped)
 
         return jsonify(hall_grouped)
 
@@ -75,5 +77,5 @@ def upload_excel():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-if __name__ == '__main__':
-    app.run(debug=True)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
